@@ -100,7 +100,7 @@ namespace AutoClickMouse
         Thread controlThread;
         //线程主要处理的函数
 
-        public static DateTime GetNtpTime(string ntpServer = "ntp.ntsc.ac.cn")
+        public static TimeSpan GetNtpTimeOffset(string ntpServer = "ntp.ntsc.ac.cn")
         {
             // NTP请求数据包
             byte[] ntpData = new byte[48];
@@ -108,60 +108,56 @@ namespace AutoClickMouse
             ntpData[0] = 0x1B; // 设置NTP请求头（客户端模式，版本号3）
 
             // 创建UDP客户端
-            using (UdpClient client = new UdpClient())
+            for(int trials = 0; trials < 20; trials++)
             {
-                try
+                using (UdpClient client = new UdpClient())
                 {
-                    // 记录发送请求的时间
-                    DateTime T1 = DateTime.UtcNow;
+                    try
+                    {
+                        // 记录发送请求的时间
+                        DateTime T1 = DateTime.UtcNow;
 
-                    // 发送请求到NTP服务器
-                    client.Connect(ntpServer, 123); // NTP端口是123
-                    client.Send(ntpData, ntpData.Length);
+                        // 发送请求到NTP服务器
+                        client.Connect(ntpServer, 123); // NTP端口是123
+                        client.Send(ntpData, ntpData.Length);
+                        client.Client.ReceiveTimeout = 1000;
 
-                    // 创建IPEndPoint对象来接收服务器地址和端口
-                    IPEndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
+                        // 创建IPEndPoint对象来接收服务器地址和端口
+                        IPEndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
 
-                    // 记录接收响应的时间
-                    byte[] response = client.Receive(ref remoteEP);
-                    DateTime T4 = DateTime.UtcNow;
+                        // 记录接收响应的时间
+                        byte[] response = client.Receive(ref remoteEP);
+                        DateTime T4 = DateTime.UtcNow;
+                        client.Close();
+                        // 从响应中提取T2和T3
+                        DateTime T2 = new DateTime(1900, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds((UInt32)((response[32] << 24) | (response[33] << 16) | (response[34] << 8) | response[35])).AddMilliseconds((UInt32)((response[36] << 24) | (response[37] << 16) | (response[38] << 8) | response[39]) * 2e-7);
+                        DateTime T3 = new DateTime(1900, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds((UInt32)((response[40] << 24) | (response[41] << 16) | (response[42] << 8) | response[43])).AddMilliseconds((UInt32)((response[44] << 24) | (response[45] << 16) | (response[46] << 8) | response[47]) * 2e-7);
 
-                    // 从响应中提取T2和T3
-                    ulong T2 = (ulong)((response[40] << 24) | (response[41] << 16) | (response[42] << 8) | response[43]);
-                    ulong T3 = (ulong)((response[44] << 24) | (response[45] << 16) | (response[46] << 8) | response[47]);
-
-                    // NTP时间是基于1900年1月1日的秒数
-                    DateTime ntpEpoch = new DateTime(1900, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-
-                    // 计算毫秒部分
-                    double milliseconds = (T3 / 4294967296.0) * 1000;
-
-                    // 构建精确的UTC时间
-                    DateTime ntpTime = ntpEpoch.AddSeconds(T3 / 4294967296.0).AddMilliseconds(milliseconds);
-
-                    // 计算网络延迟（往返时间的一半）
-                    double rtt = (T4 - T1).TotalMilliseconds;
-                    double delay = rtt / 2;
-
-                    // 校正获取到的NTP时间
-                    DateTime correctedTime = ntpTime.AddMilliseconds(delay);
-
-                    return correctedTime.ToLocalTime(); // 转换为本地时间
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"获取NTP时间失败: {ex.Message}");
-                    return DateTime.MinValue;
+                        // 构建精确的UTC时间
+                        return (T4 - T1) - (T3 - T2);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (client.Client != null)
+                            client.Close();
+                        Console.WriteLine($"获取NTP时间失败: {ex.Message}");
+                        continue;
+                    }
                 }
             }
+            MessageBox.Show("无法同步时钟，请检查网络链接。开始时间将跟随系统时间！");
+            return TimeSpan.Zero;
         }
         private void ThreadRunMethod()
         {
-            if (check_EnableStartTime.Checked)
+            startTime.Value = DateTime.Now + TimeSpan.FromSeconds(10);
+            if (check_EnableStartTime.Checked) 
             {
-                var TimeFix = GetNtpTime() - DateTime.Now;
-                while (DateTime.Now + TimeFix < startTime.Value)
+                var TimeFix = GetNtpTimeOffset();
+                var start = startTime.Value;
+                while (DateTime.Now + TimeFix < start)
                 {
+                    startTime.Value = DateTime.Now + TimeFix;
                     if ((DateTime.Now + TimeFix).Millisecond > 10)
                         Thread.Sleep(1000 - DateTime.Now.Millisecond);
                     else
