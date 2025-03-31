@@ -8,6 +8,8 @@ using System.Text;
 using System.Windows.Forms;
 using System.Threading;
 using System.Runtime.InteropServices;
+using System.Net;
+using System.Net.Sockets;
 
 namespace AutoClickMouse
 {
@@ -97,15 +99,95 @@ namespace AutoClickMouse
         //主线控制程对象
         Thread controlThread;
         //线程主要处理的函数
+
+        public static DateTime GetNtpTime(string ntpServer = "ntp.ntsc.ac.cn")
+        {
+            // NTP请求数据包
+            byte[] ntpData = new byte[48];
+            Array.Clear(ntpData, 0, ntpData.Length);
+            ntpData[0] = 0x1B; // 设置NTP请求头（客户端模式，版本号3）
+
+            // 创建UDP客户端
+            using (UdpClient client = new UdpClient())
+            {
+                try
+                {
+                    // 记录发送请求的时间
+                    DateTime T1 = DateTime.UtcNow;
+
+                    // 发送请求到NTP服务器
+                    client.Connect(ntpServer, 123); // NTP端口是123
+                    client.Send(ntpData, ntpData.Length);
+
+                    // 创建IPEndPoint对象来接收服务器地址和端口
+                    IPEndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
+
+                    // 记录接收响应的时间
+                    byte[] response = client.Receive(ref remoteEP);
+                    DateTime T4 = DateTime.UtcNow;
+
+                    // 从响应中提取T2和T3
+                    ulong T2 = (ulong)((response[40] << 24) | (response[41] << 16) | (response[42] << 8) | response[43]);
+                    ulong T3 = (ulong)((response[44] << 24) | (response[45] << 16) | (response[46] << 8) | response[47]);
+
+                    // NTP时间是基于1900年1月1日的秒数
+                    DateTime ntpEpoch = new DateTime(1900, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+                    // 计算毫秒部分
+                    double milliseconds = (T3 / 4294967296.0) * 1000;
+
+                    // 构建精确的UTC时间
+                    DateTime ntpTime = ntpEpoch.AddSeconds(T3 / 4294967296.0).AddMilliseconds(milliseconds);
+
+                    // 计算网络延迟（往返时间的一半）
+                    double rtt = (T4 - T1).TotalMilliseconds;
+                    double delay = rtt / 2;
+
+                    // 校正获取到的NTP时间
+                    DateTime correctedTime = ntpTime.AddMilliseconds(delay);
+
+                    return correctedTime.ToLocalTime(); // 转换为本地时间
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"获取NTP时间失败: {ex.Message}");
+                    return DateTime.MinValue;
+                }
+            }
+        }
         private void ThreadRunMethod()
         {
-            while (true)
+            if (check_EnableStartTime.Checked)
             {
+                var TimeFix = GetNtpTime() - DateTime.Now;
+                while (DateTime.Now + TimeFix < startTime.Value)
+                {
+                    if ((DateTime.Now + TimeFix).Millisecond > 10)
+                        Thread.Sleep(1000 - DateTime.Now.Millisecond);
+                    else
+                        Thread.Sleep(1000);
+                }
+            }
+            CursorPosition = Cursor.Position;
+            AutoClick(CursorPosition.X, CursorPosition.Y);
+            int clicks = 1;
+            while (!check_EnableClickTimes.Checked || clickTimes.Value > clicks)
+            {
+                Thread.Sleep((int)(clickInterval.Value * 1000));
                 //this.BT_Start.PerformClick();
                 CursorPosition = Cursor.Position;
                 AutoClick(CursorPosition.X, CursorPosition.Y);
-                Thread.Sleep(1000);
+                clicks += 1;
             }
+
+            BT_Start.Enabled = true;
+            BT_Stop.Enabled = false;
+
+            check_EnableClickTimes.Enabled = true;
+            check_EnableStartTime.Enabled = true;
+            clickTimes.Enabled = true;
+            clickInterval.Enabled = true;
+            startTime.Enabled = true;
         }
 
         private void BT_TestClick_Click(object sender, EventArgs e)
@@ -127,6 +209,11 @@ namespace AutoClickMouse
             }
             BT_Stop.Enabled = true;
             BT_Start.Enabled = false;
+            check_EnableClickTimes.Enabled = false;
+            check_EnableStartTime.Enabled = false;
+            clickTimes.Enabled = false;
+            clickInterval.Enabled = false;
+            startTime.Enabled = false;
         }
 
         private void BT_Stop_Click(object sender, EventArgs e)
@@ -142,6 +229,11 @@ namespace AutoClickMouse
             }
             BT_Start.Enabled = true;
             BT_Stop.Enabled = false;
+            check_EnableClickTimes.Enabled = true;
+            check_EnableStartTime.Enabled = true;
+            clickTimes.Enabled = true;
+            clickInterval.Enabled = true;
+            startTime.Enabled = true;
         }
 
         private void AutoClickMouseLeftButton_FormClosing(object sender, FormClosingEventArgs e)
@@ -247,7 +339,7 @@ namespace AutoClickMouse
                 switch (m.WParam.ToInt32())
                 {
                     case 10:
-                        this.BT_Start_Click(null,null);
+                        this.BT_Start_Click(null, null);
                         break;
                     case 11:
                         this.BT_Stop_Click(null, null);
@@ -260,4 +352,6 @@ namespace AutoClickMouse
             base.WndProc(ref m);
         }
     }
+
+
 }
